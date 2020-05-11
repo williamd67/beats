@@ -345,6 +345,6 @@ SetAdCodeMiddleware.default_ad_code route """.encode("utf-8")
 
         proc = self.start_beat()
 
-        self.wait_until(lambda: self.log_contains("missing required field accessing") == 1)
+        self.wait_until(lambda: self.log_contains("multiline.pattern cannot be empty") == 1)
 
         proc.check_kill_and_wait(exit_code=1)

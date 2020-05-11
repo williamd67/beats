@@ -79,30 +79,38 @@ func New(
 	maxBytes int,
 	config *Config,
 ) (*Reader, error) {
-	types := map[string]func(match.Matcher) (matcher, error){
-		"before": beforeMatcher,
-		"after":  afterMatcher,
-	}
+	var maxLines = defaultMaxLines
+	var pred matcher = nil
+	var flushMatcher *match.Matcher = nil
 
-	matcherType, ok := types[config.Match]
-	if !ok {
-		return nil, fmt.Errorf("unknown matcher type: %s", config.Match)
-	}
+	if config.Type == countMode {
+		maxLines = config.CountLines
+	} else {
+		types := map[string]func(match.Matcher) (matcher, error){
+			"before": beforeMatcher,
+			"after":  afterMatcher,
+		}
 
-	matcher, err := matcherType(*config.Pattern)
-	if err != nil {
-		return nil, err
-	}
+		matcherType, ok := types[config.Match]
+		if !ok {
+			return nil, fmt.Errorf("unknown matcher type: %s", config.Match)
+		}
 
-	flushMatcher := config.FlushPattern
+		var err error
+		pred, err = matcherType(*config.Pattern)
+		if err != nil {
+			return nil, err
+		}
 
-	if config.Negate {
-		matcher = negatedMatcher(matcher)
-	}
+		flushMatcher = config.FlushPattern
 
-	maxLines := defaultMaxLines
-	if config.MaxLines != nil {
-		maxLines = *config.MaxLines
+		if config.Negate {
+			pred = negatedMatcher(pred)
+		}
+
+		if config.MaxLines != nil {
+			maxLines = *config.MaxLines
+		}
 	}
 
 	tout := defaultMultilineTimeout
@@ -119,7 +127,7 @@ func New(
 
 	mlr := &Reader{
 		reader:       r,
-		pred:         matcher,
+		pred:         pred,
 		flushMatcher: flushMatcher,
 		state:        (*Reader).readFirst,
 		maxBytes:     maxBytes,
@@ -199,7 +207,7 @@ func (mlr *Reader) readNext() (reader.Message, error) {
 
 			// handle error with some content being returned by reader and
 			// line matching multiline criteria or no multiline started yet
-			if mlr.message.Bytes == 0 || mlr.pred(mlr.last, message.Content) {
+			if mlr.message.Bytes == 0 || (mlr.pred != nil && mlr.pred(mlr.last, message.Content)) {
 				mlr.addLine(message)
 
 				// return multiline and error on next read
@@ -232,7 +240,7 @@ func (mlr *Reader) readNext() (reader.Message, error) {
 		}
 
 		// if predicate does not match current multiline -> return multiline event
-		if mlr.message.Bytes > 0 && !mlr.pred(mlr.last, message.Content) {
+		if mlr.message.Bytes > 0 && mlr.pred != nil && !mlr.pred(mlr.last, message.Content) {
 			msg := mlr.finalize()
 			mlr.load(message)
 			return msg, nil
@@ -240,6 +248,12 @@ func (mlr *Reader) readNext() (reader.Message, error) {
 
 		// add line to current multiline event
 		mlr.addLine(message)
+
+		if mlr.pred == nil && mlr.numLines >= mlr.maxLines {
+			msg := mlr.finalize()
+			mlr.resetState()
+			return msg, nil
+		}
 	}
 }
 
